@@ -1,14 +1,60 @@
 #include <tonc.h>
 #include <stdlib.h>
+#include <string.h>
+// ========== Obj Buffer API ==========
+
+OBJ_ATTR obj_buffer[128];
+int obj_buffer_current=0;
+OBJ_AFFINE *obj_aff_buffer= (OBJ_AFFINE*)obj_buffer;
+void clear_obj_buffer(){
+    for (; obj_buffer_current < 128; obj_buffer_current++)
+        obj_buffer[obj_buffer_current].attr0 = ATTR0_HIDE;
+    obj_buffer_current = 0;
+}
+
+
+// ========== Resource Allocation ==========
+
+int current_obj_tile_idx=0;
+int current_pal_idx=0;
+void reset_resource_idx(){
+    current_obj_tile_idx=512;
+    current_pal_idx=0;
+}
+
+
 #include "gfx_doodle.h"
+int doodle_tile_idx,doodle_pal_idx;
+void load_doodle_gfx(){
+    memcpy(&tile_mem[4][current_obj_tile_idx],gfx_doodleTiles,gfx_doodleTilesLen);
+    doodle_tile_idx=current_obj_tile_idx;
+    current_obj_tile_idx+=gfx_doodleTilesLen/32;
+    memcpy(&pal_obj_bank[current_pal_idx],gfx_doodlePal,gfx_doodlePalLen);
+    doodle_pal_idx=current_pal_idx;
+    current_pal_idx++;
+}
+#include "gfx_platforms.h"
+int platform_tile_idx, platform_pal_idx;
+void load_platform_gfx(){
+    memcpy(&tile_mem[4][current_obj_tile_idx],gfx_platformsTiles,gfx_platformsTilesLen);
+    platform_tile_idx=current_obj_tile_idx;
+    current_obj_tile_idx+=gfx_platformsTilesLen/32;
+    memcpy(&pal_obj_bank[current_pal_idx],gfx_platformsPal,gfx_platformsPalLen);
+    platform_pal_idx=current_pal_idx;
+    current_pal_idx++;
+}
+
+// ========== GameObjects ==========
 
 #define VIEWPORT_WIDTH 72
 #define VIEWPORT_HEIGHT 160
-
+#define CLR_BG RGB15(30,29,29)
 
 void draw_background(){
-    m3_rect(0,0,VIEWPORT_WIDTH,VIEWPORT_HEIGHT,RGB15(30,29,29));
+    m3_rect(0,0,VIEWPORT_WIDTH,VIEWPORT_HEIGHT,CLR_BG);
 }
+
+
 
 struct{
     FIXED x,y,vx,vy,last_y;
@@ -28,32 +74,23 @@ void init_doodle(){
     doodle.dec=float2fx(0.1f/4);
     doodle.g=float2fx(0.2f/4);
     doodle.max_vx=float2fx(2.0f/2);
-    doodle.velo=float2fx(5.5f/2);
-    // max height=velo^2/(2*g)\approx 75
-    doodle.max_plat_dist=75;
+    doodle.velo=float2fx(5.0f/2);
+    doodle.max_plat_dist=60; // max jump height=velo^2/(2*g)=62.5
 }
 void draw_doodle(){
-    int x=fx2int(doodle.x);
-    int y=fx2int(doodle.y);
-    int turn=doodle.turn;
-    for(int j=0;j<=11;j++){
-        int n=y+j-11;
-        if(0<=n && n<VIEWPORT_HEIGHT)
-        for(int i=0;i<=11;i++){
-            int m;
-            if(turn==1)m=x-7+i;else m=x-i+7;
-            COLOR t=((u16*)gfx_doodleBitmap)[j*12+i];
-            if(0<=m && m<VIEWPORT_WIDTH && t!=CLR_RED)
-                m3_plot(m,n,t);
-        }
-    }		
+    OBJ_ATTR *spr= &obj_buffer[obj_buffer_current++];
+    obj_set_attr(spr,ATTR0_SQUARE,ATTR1_SIZE_16,ATTR2_BUILD(doodle_tile_idx,doodle_pal_idx,0));
+    int x=fx2int(doodle.x)-7;
+    int y=fx2int(doodle.y)-15;
+    if(!doodle.turn){spr->attr1|=ATTR1_HFLIP;x--;}
+    obj_set_pos(spr,x,y);
+
+    // m3_hline(0,fx2int(doodle.y),VIEWPORT_WIDTH,CLR_RED);
+    // m3_vline(fx2int(doodle.x),0,VIEWPORT_HEIGHT,CLR_RED);
 }
 void update_doodle(){
-    if(key_is_down(KEY_LEFT))
-        doodle.vx=fxsub(doodle.vx,doodle.acc);
-    if(key_is_down(KEY_RIGHT))
-        doodle.vx=fxadd(doodle.vx,doodle.acc);
-    if(!key_is_down(KEY_LEFT) && !key_is_down(KEY_RIGHT)){
+    doodle.vx=fxadd(doodle.vx,key_tri_horz()*doodle.acc);
+    if(!key_tri_horz()){
         if(doodle.vx>0)
             doodle.vx=max(fxsub(doodle.vx,doodle.dec),0);
         if(doodle.vx<0)
@@ -77,15 +114,15 @@ void update_doodle(){
 typedef enum{
     PLATFORM_INACTIVE=0,
     PLATFORM_NORMAL=1,
-    PLATFORM_FAKE=2,
-    PLATFORM_MOVING=3,
+    PLATFORM_MOVING=2,
+    PLATFORM_FAKE=3,
 } PlatformType;
 typedef struct{
     FIXED x,y,vx;
     PlatformType type;
 } Platform;
-const int platform_extend=6;
-const int platform_extend_y=2;
+#define platform_extend 7
+#define platform_extend_y 3
 #define MAX_PLATFORMS 50
 Platform platforms[MAX_PLATFORMS]; // use a fifo queue for object pooling
 int platform_tail=0;
@@ -100,25 +137,17 @@ Platform* add_platform(FIXED x,FIXED y,PlatformType type){
     return p;
 }
 void draw_platform(Platform* p){
-    int x=fx2int(p->x);
-    int y=fx2int(p->y);
+    OBJ_ATTR *spr= &obj_buffer[obj_buffer_current++];
+    int tile_idx=platform_tile_idx;
     switch(p->type){
-        case PLATFORM_NORMAL:
-            m3_frame(x-platform_extend,y,x+platform_extend+1,y+platform_extend_y+1,CLR_BLACK);
-            m3_rect(x-platform_extend+1,y+1,x+platform_extend,y+platform_extend_y,RGB15(5,28,8));
-            break;
-        case PLATFORM_FAKE:
-            m3_frame(x-platform_extend,y,x+platform_extend+1,y+platform_extend_y+1,CLR_BLACK);
-            m3_rect(x-platform_extend+1,y+1,x+platform_extend,y+platform_extend_y,RGB15(15,3,8));
-            m3_vline(x,y,y+platform_extend_y,CLR_BLACK);
-            break;
-        case PLATFORM_MOVING:
-            m3_frame(x-platform_extend,y,x+platform_extend+1,y+platform_extend_y+1,CLR_BLACK);
-            m3_rect(x-platform_extend+1,y+1,x+platform_extend,y+platform_extend_y,RGB15(9,25,29));
-            break;
-        default:
-            break;
+        case PLATFORM_NORMAL:   tile_idx+=0;    break;
+        case PLATFORM_MOVING:   tile_idx+=2;    break;
+        case PLATFORM_FAKE:     tile_idx+=4;    break;
     }
+    obj_set_attr(spr,ATTR0_WIDE,ATTR1_SIZE_16x8,ATTR2_BUILD(tile_idx,platform_pal_idx,0));
+    int x=fx2int(p->x)-platform_extend;
+    int y=fx2int(p->y);
+    obj_set_pos(spr,x,y);
 }
 void update_platform(Platform* p){
     // check collision against player
@@ -159,9 +188,7 @@ void init_game(){
     game.next_plat_y=VIEWPORT_HEIGHT;
     game.fake_plat_y_total=0;
 }
-
-
-const int min_doodle_screen_height=VIEWPORT_HEIGHT/2;
+#define min_doodle_screen_height (VIEWPORT_HEIGHT/2)
 void update_camera(){
     int screen_scroll=min_doodle_screen_height-fx2int(doodle.y);
     if(screen_scroll<=0)return;
@@ -175,15 +202,6 @@ void update_camera(){
     game.next_plat_y+=screen_scroll;
 }
 void update_platform_spawn(){
-
-
-	// NextPlat=20;PlatV=0;FreqFake=100;FreqMove=100;
-	// if(Score>1500){NextPlat=20;PlatV=0.3;FreqFake=70;FreqMove=80;}
-	// if(Score>3000){NextPlat=15;PlatV=0.3;FreqFake=50;FreqMove=70;}
-	// if(Score>4500){NextPlat=15;PlatV=0.6;FreqFake=30;FreqMove=50;}
-	// if(Score>6000){NextPlat=20;PlatV=0.9;FreqFake=30;FreqMove=50;}
-	// if(Score>9000){NextPlat=20;PlatV=1.2;FreqFake=10;FreqMove=40;}
-	// if(Score>12000){NextPlat=20;PlatV=1.5;FreqFake=0;FreqMove=40;}
 
     int plat_y_interval;FIXED plat_vy;int freq_moving;int freq_fake;
     if(game.score<1){plat_y_interval=10;plat_vy=0;freq_moving=0;freq_fake=0;}
@@ -219,22 +237,36 @@ void update_platform_spawn(){
     }
 
 }
-
+void draw_ui(){
+    char str[32];
+    siprintf(str,"%8d",min(game.score,99999999));
+    bm_clrs(8,1,str,CLR_BG);
+    bm_puts(8,1,str,CLR_BLACK);
+}
 
 int frame=0;
 
 int main() 
 {
-	REG_DISPCNT= DCNT_MODE3 | DCNT_BG2;
-    irq_init(NULL);
-    irq_add(II_VBLANK, NULL);
+    // ======== Load Resources ========
+    reset_resource_idx();
+    load_doodle_gfx();
+    load_platform_gfx();
 
+    // ======== Initialize Devices and Libraries ========
+    irq_init(NULL);irq_add(II_VBLANK, NULL);
+    txt_init_std();
+    oam_init(obj_buffer,128);
+	REG_DISPCNT= DCNT_MODE3 | DCNT_BG2 | DCNT_OBJ | DCNT_OBJ_1D;
+    m3_fill(CLR_BLACK);
+    draw_background();
+    // ======== Initialize Game State ========
     init_game();
     init_doodle();
-    m3_fill(RGB15(0,0,0));
 
 	while(1){
-        VBlankIntrWait();
+        //======== Updating Game Logic at VDraw(197120 cycles) ========
+        profile_start();
         key_poll();
         update_doodle();
         for(int i=0;i<MAX_PLATFORMS;i++)
@@ -242,11 +274,25 @@ int main()
                 update_platform(&platforms[i]);
         update_camera();
         update_platform_spawn();
-        draw_background();
+        
+        //======== Drawing at obj_buffer, it is faster than doing it at VBlank, because  ========
+        clear_obj_buffer();
+        draw_doodle();
         for(int i=0;i<MAX_PLATFORMS;i++)
             if(platforms[i].type!=PLATFORM_INACTIVE)
                 draw_platform(&platforms[i]);
-        draw_doodle();
+        int time1=profile_stop();
+        //======== Updating VRAM at VBlank (83776 cycles) ========
+        VBlankIntrWait();
+        profile_start();
+        draw_ui();
+        oam_copy(oam_mem,obj_buffer,128);
+        int time2=profile_stop();
+        //========Debug Display========
+        char str[32];
+        siprintf(str,"%d %d",time1,time2);
+        bm_clrs(80,150,str,CLR_BLACK);
+        bm_puts(80,150,str,CLR_WHITE);
         frame++;
     }
 
