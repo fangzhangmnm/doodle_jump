@@ -14,5 +14,11 @@
     [x] fix bug of consecutive fake blocks. maybe max height is too high
     [x] Figure out how to use sprites
     [x] reduce jump height to make the platform you departed not disappear below the screen when screen scrolling
+    [x] change background to tilemap mode
+        https://gbadev.net/tonc/regbg.html
+        - think the order of backgrounds and objects
 - Plan
-    [ ] change background to tilemap mode
+    [ ] add window to background
+    [ ] write text on tile mode
+
+    

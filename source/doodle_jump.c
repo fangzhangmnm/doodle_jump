@@ -1,47 +1,72 @@
 #include <tonc.h>
-#include <stdlib.h>
-#include <string.h>
+// #include <stdlib.h>
+// #include <string.h>
 // ========== Obj Buffer API ==========
 
 OBJ_ATTR obj_buffer[128];
 int obj_buffer_current=0;
 OBJ_AFFINE *obj_aff_buffer= (OBJ_AFFINE*)obj_buffer;
-void clear_obj_buffer(){
+void clear_objects(){
     for (; obj_buffer_current < 128; obj_buffer_current++)
         obj_buffer[obj_buffer_current].attr0 = ATTR0_HIDE;
     obj_buffer_current = 0;
 }
+int current_sbb_buffer=1; // 0 cannot be used (why?)
+
+//========== RNG API ==========
+
+int _rand_seed=42;
+INLINE int rand(){
+    // returns a [0,32767] random number
+    _rand_seed=1664525*_rand_seed+1013904223;
+    return (_rand_seed>>16)&0x7FFF;
+}
+
+
 
 
 // ========== Resource Allocation ==========
 
-int current_obj_tile_idx=0;
-int current_pal_idx=0;
-void reset_resource_idx(){
-    current_obj_tile_idx=512;
-    current_pal_idx=0;
+int current_obj_tile_idx;
+int current_obj_pal_idx;
+int current_bg_pal_idx;
+int current_bg_cbb_idx;
+void clear_resources(bool bitmap_mode){
+    current_obj_tile_idx=bitmap_mode?512:0;
+    current_obj_pal_idx=0;
+    current_bg_pal_idx=0;
 }
 
 
 #include "gfx_doodle.h"
-int doodle_tile_idx,doodle_pal_idx;
+int gfx_doodle_tile_idx,gfx_doodle_pal_idx;
 void load_doodle_gfx(){
-    memcpy(&tile_mem[4][current_obj_tile_idx],gfx_doodleTiles,gfx_doodleTilesLen);
-    doodle_tile_idx=current_obj_tile_idx;
+    memcpy32(&tile_mem[4][current_obj_tile_idx],gfx_doodleTiles,gfx_doodleTilesLen/4);
+    gfx_doodle_tile_idx=current_obj_tile_idx;
     current_obj_tile_idx+=gfx_doodleTilesLen/32;
-    memcpy(&pal_obj_bank[current_pal_idx],gfx_doodlePal,gfx_doodlePalLen);
-    doodle_pal_idx=current_pal_idx;
-    current_pal_idx++;
+    memcpy32(&pal_obj_bank[current_obj_pal_idx],gfx_doodlePal,gfx_doodlePalLen/4);
+    gfx_doodle_pal_idx=current_obj_pal_idx;
+    current_obj_pal_idx++;
 }
 #include "gfx_platforms.h"
-int platform_tile_idx, platform_pal_idx;
+int gfx_platform_tile_idx, gfx_platform_pal_idx;
 void load_platform_gfx(){
-    memcpy(&tile_mem[4][current_obj_tile_idx],gfx_platformsTiles,gfx_platformsTilesLen);
-    platform_tile_idx=current_obj_tile_idx;
+    memcpy32(&tile_mem[4][current_obj_tile_idx],gfx_platformsTiles,gfx_platformsTilesLen/4);
+    gfx_platform_tile_idx=current_obj_tile_idx;
     current_obj_tile_idx+=gfx_platformsTilesLen/32;
-    memcpy(&pal_obj_bank[current_pal_idx],gfx_platformsPal,gfx_platformsPalLen);
-    platform_pal_idx=current_pal_idx;
-    current_pal_idx++;
+    memcpy32(&pal_obj_bank[current_obj_pal_idx],gfx_platformsPal,gfx_platformsPalLen/4);
+    gfx_platform_pal_idx=current_obj_pal_idx;
+    current_obj_pal_idx++;
+}
+#include "gfx_bg_tile.h"
+int gfx_bg_cbb_idx,gfx_bg_pal_idx;
+void load_bg_gfx(){
+    memcpy32(&tile_mem[current_bg_cbb_idx][0],gfx_bg_tileTiles,gfx_bg_tileTilesLen/4);
+    gfx_bg_cbb_idx=current_bg_cbb_idx;
+    current_bg_cbb_idx++;
+    memcpy32(&pal_bg_bank[current_bg_pal_idx],gfx_bg_tilePal,gfx_bg_tilePalLen/4);
+    gfx_bg_pal_idx=current_bg_pal_idx;
+    current_bg_pal_idx++;
 }
 
 // ========== GameObjects ==========
@@ -49,9 +74,18 @@ void load_platform_gfx(){
 #define VIEWPORT_WIDTH 72
 #define VIEWPORT_HEIGHT 160
 #define CLR_BG RGB15(30,29,29)
-
+struct{
+    int dy;
+    int sbb_idx;
+}background;
+void init_background(){
+    for(int i=0;i<32*32;i++)se_mem[current_sbb_buffer][i]=0;
+    REG_BG3CNT=BG_CBB(gfx_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32;
+    REG_DISPCNT|=DCNT_BG3;
+    background.sbb_idx=current_sbb_buffer; current_sbb_buffer++;
+}
 void draw_background(){
-    m3_rect(0,0,VIEWPORT_WIDTH,VIEWPORT_HEIGHT,CLR_BG);
+    REG_BG3HOFS=0;REG_BG3VOFS=-background.dy%8;
 }
 
 
@@ -79,7 +113,7 @@ void init_doodle(){
 }
 void draw_doodle(){
     OBJ_ATTR *spr= &obj_buffer[obj_buffer_current++];
-    obj_set_attr(spr,ATTR0_SQUARE,ATTR1_SIZE_16,ATTR2_BUILD(doodle_tile_idx,doodle_pal_idx,0));
+    obj_set_attr(spr,ATTR0_SQUARE,ATTR1_SIZE_16,ATTR2_BUILD(gfx_doodle_tile_idx,gfx_doodle_pal_idx,0));
     int x=fx2int(doodle.x)-7;
     int y=fx2int(doodle.y)-15;
     if(!doodle.turn){spr->attr1|=ATTR1_HFLIP;x--;}
@@ -138,29 +172,31 @@ Platform* add_platform(FIXED x,FIXED y,PlatformType type){
 }
 void draw_platform(Platform* p){
     OBJ_ATTR *spr= &obj_buffer[obj_buffer_current++];
-    int tile_idx=platform_tile_idx;
+    int tile_idx=gfx_platform_tile_idx;
     switch(p->type){
         case PLATFORM_NORMAL:   tile_idx+=0;    break;
         case PLATFORM_MOVING:   tile_idx+=2;    break;
         case PLATFORM_FAKE:     tile_idx+=4;    break;
+        default: break;
     }
-    obj_set_attr(spr,ATTR0_WIDE,ATTR1_SIZE_16x8,ATTR2_BUILD(tile_idx,platform_pal_idx,0));
+    obj_set_attr(spr,ATTR0_WIDE,ATTR1_SIZE_16x8,ATTR2_BUILD(tile_idx,gfx_platform_pal_idx,0));
     int x=fx2int(p->x)-platform_extend;
     int y=fx2int(p->y);
     obj_set_pos(spr,x,y);
 }
 void update_platform(Platform* p){
     // check collision against player
-    if(doodle.vy>0){
-        if(p->x-int2fx(platform_extend+doodle_extend)<=doodle.x
+    bool collide=( 
+        doodle.vy>0
+        && p->x-int2fx(platform_extend+doodle_extend)<=doodle.x
         && doodle.x<=p->x+int2fx(platform_extend+doodle_extend)
-        && doodle.last_y<=p->y && doodle.y>=p->y){
-            if(p->type==PLATFORM_FAKE){
-                p->type=PLATFORM_INACTIVE;
-            }else{
-                doodle.vy=-doodle.velo;
-                doodle.y=p->y;
-            }
+        && doodle.last_y<=p->y && doodle.y>=p->y);
+    if(collide){
+        if(p->type==PLATFORM_FAKE){
+            p->type=PLATFORM_INACTIVE;
+        }else{
+            doodle.vy=-doodle.velo;
+            doodle.y=p->y;
         }
     }
     // move platform
@@ -200,6 +236,7 @@ void update_camera(){
     
     game.score+=screen_scroll;
     game.next_plat_y+=screen_scroll;
+    background.dy+=screen_scroll;
 }
 void update_platform_spawn(){
 
@@ -237,11 +274,34 @@ void update_platform_spawn(){
     }
 
 }
+void init_ui(){
+    memset32(&se_mem[6],0,SBB_SIZE/4);
+    // txt_init_se(
+    //     0,
+    //     BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32,
+    //     SE_BUILD(0,current_bg_pal_idx,0,0),
+    //     CLR_BLACK,
+    //     0);
+    tte_init_se(
+        0,
+        BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32,
+        0,
+        CLR_YELLOW,
+        14,
+        NULL,
+        NULL);
+
+    current_bg_cbb_idx++;
+    current_bg_pal_idx++;
+    current_sbb_buffer++;
+    REG_DISPCNT|=DCNT_BG0;
+}
 void draw_ui(){
     char str[32];
-    siprintf(str,"%8d",min(game.score,99999999));
-    bm_clrs(8,1,str,CLR_BG);
-    bm_puts(8,1,str,CLR_BLACK);
+    // siprintf(str,"%8d",min(game.score,99999999));
+    // se_puts(8,0,str,0x1000);
+    siprintf(str,"#{P:8,0}%8d",min(game.score,99999999));
+    tte_write(str);
 }
 
 int frame=0;
@@ -249,20 +309,26 @@ int frame=0;
 int main() 
 {
     // ======== Load Resources ========
-    reset_resource_idx();
+    clear_resources(false);
     load_doodle_gfx();
     load_platform_gfx();
+    load_bg_gfx();
 
     // ======== Initialize Devices and Libraries ========
     irq_init(NULL);irq_add(II_VBLANK, NULL);
     txt_init_std();
     oam_init(obj_buffer,128);
-	REG_DISPCNT= DCNT_MODE3 | DCNT_BG2 | DCNT_OBJ | DCNT_OBJ_1D;
-    m3_fill(CLR_BLACK);
-    draw_background();
+    REG_DISPCNT= DCNT_MODE0 | DCNT_OBJ | DCNT_OBJ_1D;
+    // window
+    REG_WIN0H=WIN_BUILD(VIEWPORT_WIDTH,0); // right(exclusive),left(inclusive)
+    REG_WIN0V=WIN_BUILD(VIEWPORT_HEIGHT,0);
+    REG_WININ=WININ_BUILD(WIN_BG0|WIN_BG3|WIN_OBJ,0); // which to show in win0 and win1
+    REG_DISPCNT|=DCNT_WIN0;
     // ======== Initialize Game State ========
     init_game();
     init_doodle();
+    init_background();
+    init_ui();
 
 	while(1){
         //======== Updating Game Logic at VDraw(197120 cycles) ========
@@ -276,7 +342,7 @@ int main()
         update_platform_spawn();
         
         //======== Drawing at obj_buffer, it is faster than doing it at VBlank, because  ========
-        clear_obj_buffer();
+        clear_objects();
         draw_doodle();
         for(int i=0;i<MAX_PLATFORMS;i++)
             if(platforms[i].type!=PLATFORM_INACTIVE)
@@ -287,12 +353,13 @@ int main()
         profile_start();
         draw_ui();
         oam_copy(oam_mem,obj_buffer,128);
+        draw_background();
         int time2=profile_stop();
         //========Debug Display========
-        char str[32];
-        siprintf(str,"%d %d",time1,time2);
-        bm_clrs(80,150,str,CLR_BLACK);
-        bm_puts(80,150,str,CLR_WHITE);
+        // char str[32];
+        // siprintf(str,"%d %d",time1,time2);
+        // bm_clrs(80,150,str,CLR_BLACK);
+        // bm_puts(80,150,str,CLR_WHITE);
         frame++;
     }
 
