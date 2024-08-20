@@ -1,4 +1,4 @@
 build/
 *.elf
-screenshots/
+screenshots/*
 !screenshots/screenshot.gif
