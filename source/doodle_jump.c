@@ -70,17 +70,42 @@ void load_bg_gfx(){
 }
 
 // ========== GameObjects ==========
-
-#define VIEWPORT_WIDTH 72
-#define VIEWPORT_HEIGHT 160
-#define CLR_BG RGB15(30,29,29)
 struct{
     int dy;
     int sbb_idx;
 }background;
+struct{
+    int score;
+    int next_plat_y;
+    int fake_plat_y_total;
+    bool game_over;
+}game;
+struct{
+    FIXED x,y,vx,vy,last_y;
+    FIXED acc,dec,g,max_vx,velo;
+    int turn;
+    int max_plat_dist;
+} doodle;
+typedef enum{
+    PLATFORM_INACTIVE=0,
+    PLATFORM_NORMAL=1,
+    PLATFORM_MOVING=2,
+    PLATFORM_FAKE=3,
+} PlatformType;
+typedef struct{
+    FIXED x,y,vx;
+    PlatformType type;
+} Platform;
+#define MAX_PLATFORMS 50
+Platform platforms[MAX_PLATFORMS]; // use a fifo queue for object pooling
+int platform_tail=0;
+// ---------- Background ----------
+#define VIEWPORT_WIDTH 72
+#define VIEWPORT_HEIGHT 160
+#define CLR_BG RGB15(30,29,29)
 void init_background(){
     for(int i=0;i<32*32;i++)se_mem[current_sbb_buffer][i]=0;
-    REG_BG3CNT=BG_CBB(gfx_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32;
+    REG_BG3CNT=BG_CBB(gfx_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(3);
     REG_DISPCNT|=DCNT_BG3;
     background.sbb_idx=current_sbb_buffer; current_sbb_buffer++;
 }
@@ -88,14 +113,7 @@ void draw_background(){
     REG_BG3HOFS=0;REG_BG3VOFS=-background.dy%8;
 }
 
-
-
-struct{
-    FIXED x,y,vx,vy,last_y;
-    FIXED acc,dec,g,max_vx,velo;
-    int turn;
-    int max_plat_dist;
-} doodle;
+// ---------- Doodle ----------
 const int doodle_extend=5;
 void init_doodle(){
     doodle.x=int2fx(VIEWPORT_WIDTH/2);
@@ -113,7 +131,8 @@ void init_doodle(){
 }
 void draw_doodle(){
     OBJ_ATTR *spr= &obj_buffer[obj_buffer_current++];
-    obj_set_attr(spr,ATTR0_SQUARE,ATTR1_SIZE_16,ATTR2_BUILD(gfx_doodle_tile_idx,gfx_doodle_pal_idx,0));
+    // obj_set_attr(spr,ATTR0_SQUARE,ATTR1_SIZE_16,ATTR2_BUILD(gfx_doodle_tile_idx,gfx_doodle_pal_idx,3));
+    obj_set_attr(spr,ATTR0_SQUARE,ATTR1_SIZE_16,ATTR2_ID(gfx_doodle_tile_idx)|ATTR2_PALBANK(gfx_doodle_pal_idx)|ATTR2_PRIO(3));
     int x=fx2int(doodle.x)-7;
     int y=fx2int(doodle.y)-15;
     if(!doodle.turn){spr->attr1|=ATTR1_HFLIP;x--;}
@@ -139,27 +158,18 @@ void update_doodle(){
     doodle.vy=fxadd(doodle.vy,doodle.g);
     doodle.last_y=doodle.y;
     doodle.y=fxadd(doodle.y,doodle.vy);
-    if(doodle.y>int2fx(VIEWPORT_HEIGHT-1)){
-        doodle.y=int2fx(VIEWPORT_HEIGHT-1);
-        doodle.vy=-doodle.velo;
+    // if(doodle.y>int2fx(VIEWPORT_HEIGHT-1)){
+    //     doodle.y=int2fx(VIEWPORT_HEIGHT-1);
+    //     doodle.vy=-doodle.velo;
+    // }
+    if(doodle.y>int2fx(VIEWPORT_HEIGHT+doodle_extend)){
+        game.game_over=true;
     }
 }
 
-typedef enum{
-    PLATFORM_INACTIVE=0,
-    PLATFORM_NORMAL=1,
-    PLATFORM_MOVING=2,
-    PLATFORM_FAKE=3,
-} PlatformType;
-typedef struct{
-    FIXED x,y,vx;
-    PlatformType type;
-} Platform;
+// ---------- Platforms ----------
 #define platform_extend 7
 #define platform_extend_y 3
-#define MAX_PLATFORMS 50
-Platform platforms[MAX_PLATFORMS]; // use a fifo queue for object pooling
-int platform_tail=0;
 
 Platform* add_platform(FIXED x,FIXED y,PlatformType type){
     Platform* p=&platforms[platform_tail];
@@ -179,7 +189,7 @@ void draw_platform(Platform* p){
         case PLATFORM_FAKE:     tile_idx+=4;    break;
         default: break;
     }
-    obj_set_attr(spr,ATTR0_WIDE,ATTR1_SIZE_16x8,ATTR2_BUILD(tile_idx,gfx_platform_pal_idx,0));
+    obj_set_attr(spr,ATTR0_WIDE,ATTR1_SIZE_16x8,ATTR2_ID(tile_idx)|ATTR2_PALBANK(gfx_platform_pal_idx)|ATTR2_PRIO(3));
     int x=fx2int(p->x)-platform_extend;
     int y=fx2int(p->y);
     obj_set_pos(spr,x,y);
@@ -214,15 +224,12 @@ void update_platform(Platform* p){
         p->type=PLATFORM_INACTIVE;
     }
 }
-struct{
-    int score;
-    int next_plat_y;
-    int fake_plat_y_total;
-}game;
+// ---------- Game Manager ----------
 void init_game(){
     game.score=0;
     game.next_plat_y=VIEWPORT_HEIGHT;
     game.fake_plat_y_total=0;
+    game.game_over=false;
 }
 #define min_doodle_screen_height (VIEWPORT_HEIGHT/2)
 void update_camera(){
@@ -274,22 +281,17 @@ void update_platform_spawn(){
     }
 
 }
+// ---------- UI ----------
 void init_ui(){
     memset32(&se_mem[6],0,SBB_SIZE/4);
-    // txt_init_se(
+    // tte_init_se(
     //     0,
-    //     BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32,
-    //     SE_BUILD(0,current_bg_pal_idx,0,0),
+    //     BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(0),
+    //     0,
     //     CLR_BLACK,
-    //     0);
-    tte_init_se(
-        0,
-        BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32,
-        0,
-        CLR_YELLOW,
-        14,
-        NULL,
-        NULL);
+    //     14,
+    //     NULL,
+    //     NULL);
 
     current_bg_cbb_idx++;
     current_bg_pal_idx++;
@@ -298,70 +300,84 @@ void init_ui(){
 }
 void draw_ui(){
     char str[32];
-    // siprintf(str,"%8d",min(game.score,99999999));
-    // se_puts(8,0,str,0x1000);
-    siprintf(str,"#{P:8,0}%8d",min(game.score,99999999));
+    siprintf(str,"%8d",min(game.score,99999999));
+    tte_set_pos(8,0);
     tte_write(str);
 }
-
-int frame=0;
+// ========== Menus ==========
+int menu_game_over(){
+    while(1){
+        VBlankIntrWait();
+        key_poll();
+        tte_set_pos(0,72);
+        tte_write("Game Over");
+        tte_set_pos(8,80);
+        tte_write("Press A");
+        if(key_hit(KEY_A))return 0;
+    }
+}
 
 int main() 
 {
+    // ======== Initialize Devices and Libraries ========
+    irq_init(NULL);irq_add(II_VBLANK, NULL);
+    txt_init_std();
+    oam_init(obj_buffer,128);
+
     // ======== Load Resources ========
     clear_resources(false);
     load_doodle_gfx();
     load_platform_gfx();
     load_bg_gfx();
 
-    // ======== Initialize Devices and Libraries ========
-    irq_init(NULL);irq_add(II_VBLANK, NULL);
-    txt_init_std();
-    oam_init(obj_buffer,128);
+    // ======== Configure Display ========
     REG_DISPCNT= DCNT_MODE0 | DCNT_OBJ | DCNT_OBJ_1D;
-    // window
-    REG_WIN0H=WIN_BUILD(VIEWPORT_WIDTH,0); // right(exclusive),left(inclusive)
+    REG_WIN0H=WIN_BUILD(VIEWPORT_WIDTH,0);
     REG_WIN0V=WIN_BUILD(VIEWPORT_HEIGHT,0);
-    REG_WININ=WININ_BUILD(WIN_BG0|WIN_BG3|WIN_OBJ,0); // which to show in win0 and win1
+    REG_WININ=WININ_BUILD(WIN_BG0|WIN_BG3|WIN_OBJ,0);
+    REG_WINOUT=WINOUT_BUILD(WIN_BG0,0);
     REG_DISPCNT|=DCNT_WIN0;
-    // ======== Initialize Game State ========
+    // ======== Initialize GameObjects ========
     init_game();
     init_doodle();
     init_background();
     init_ui();
 
-	while(1){
-        //======== Updating Game Logic at VDraw(197120 cycles) ========
-        profile_start();
-        key_poll();
-        update_doodle();
-        for(int i=0;i<MAX_PLATFORMS;i++)
-            if(platforms[i].type!=PLATFORM_INACTIVE)
-                update_platform(&platforms[i]);
-        update_camera();
-        update_platform_spawn();
-        
-        //======== Drawing at obj_buffer, it is faster than doing it at VBlank, because  ========
-        clear_objects();
-        draw_doodle();
-        for(int i=0;i<MAX_PLATFORMS;i++)
-            if(platforms[i].type!=PLATFORM_INACTIVE)
-                draw_platform(&platforms[i]);
-        int time1=profile_stop();
-        //======== Updating VRAM at VBlank (83776 cycles) ========
-        VBlankIntrWait();
-        profile_start();
-        draw_ui();
-        oam_copy(oam_mem,obj_buffer,128);
-        draw_background();
-        int time2=profile_stop();
-        //========Debug Display========
-        // char str[32];
-        // siprintf(str,"%d %d",time1,time2);
-        // bm_clrs(80,150,str,CLR_BLACK);
-        // bm_puts(80,150,str,CLR_WHITE);
-        frame++;
+    while(1){
+        while(!game.game_over){
+            //======== Updating Game Logic at VDraw(197120 cycles) ========
+            profile_start();
+            key_poll();
+            update_doodle();
+            for(int i=0;i<MAX_PLATFORMS;i++)
+                if(platforms[i].type!=PLATFORM_INACTIVE)
+                    update_platform(&platforms[i]);
+            update_camera();
+            update_platform_spawn();
+            
+            //======== Drawing at obj_buffer, it is faster than doing it at VBlank, because  ========
+            clear_objects();
+            draw_doodle();
+            for(int i=0;i<MAX_PLATFORMS;i++)
+                if(platforms[i].type!=PLATFORM_INACTIVE)
+                    draw_platform(&platforms[i]);
+            int time1=profile_stop();
+            //======== Updating VRAM at VBlank (83776 cycles) ========
+            VBlankIntrWait();
+            profile_start();
+            draw_ui();
+            oam_copy(oam_mem,obj_buffer,128);
+            draw_background();
+            int time2=profile_stop();
+            //========Debug Display========
+            char str[32];
+            siprintf(str,"%d %d",time1,time2);
+            // bm_clrs(80,150,str,CLR_BLACK);
+            // bm_puts(80,150,str,CLR_WHITE);
+            tte_set_pos(80,152);
+            tte_write(str);
+        }
+        menu_game_over();
     }
-
 	return 0;
 }

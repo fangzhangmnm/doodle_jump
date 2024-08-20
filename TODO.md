@@ -17,8 +17,12 @@
     [x] change background to tilemap mode
         https://gbadev.net/tonc/regbg.html
         - think the order of backgrounds and objects
-- Plan
-    [ ] add window to background
-    [ ] write text on tile mode
+    [x] add window to background
+    [x] write text on tile mode
+    [x] add death and menu
+- next plan
+    - add textbox for text
+    - add items and monsters
+    - add audio
 
     
