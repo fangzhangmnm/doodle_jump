@@ -287,11 +287,23 @@ void init_ui(){
     // tte_init_se(
     //     0,
     //     BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(0),
-    //     0,
+    //     current_bg_pal_idx<<12,
     //     CLR_BLACK,
     //     14,
     //     NULL,
-    //     NULL);
+    //     (fnDrawg)se_drawg_w8h8);
+    tte_init_chr4c(
+        0,
+        BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(0),
+        current_bg_pal_idx<<12,
+        bytes2word(13,15,1,0),
+        CLR_BLACK,
+        &verdana9_b4Font,
+        (fnDrawg)chr4c_drawg_b4cts_fast);
+    tte_set_color(TTE_INK,CLR_WHITE);
+    tte_set_color(TTE_SHADOW,CLR_BLACK);
+    tte_set_color(TTE_PAPER,CLR_GRAY);
+
 
     current_bg_cbb_idx++;
     current_bg_pal_idx++;
@@ -300,8 +312,9 @@ void init_ui(){
 }
 void draw_ui(){
     char str[32];
-    siprintf(str,"%8d",min(game.score,99999999));
+    siprintf(str,"Score:%8d",min(game.score,99999999));
     tte_set_pos(8,0);
+    tte_erase_rect(0,0,VIEWPORT_WIDTH,12);
     tte_write(str);
 }
 // ========== Menus ==========
@@ -374,7 +387,9 @@ int main()
             siprintf(str,"%d %d",time1,time2);
             // bm_clrs(80,150,str,CLR_BLACK);
             // bm_puts(80,150,str,CLR_WHITE);
-            tte_set_pos(80,152);
+            // tte_set_pos(80,152);
+            tte_set_pos(VIEWPORT_WIDTH,148);
+            tte_erase_rect(VIEWPORT_WIDTH,148,240,160);
             tte_write(str);
         }
         menu_game_over();

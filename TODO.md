@@ -19,6 +19,7 @@
         - think the order of backgrounds and objects
     [x] add window to background
     [x] write text on tile mode
+    [x] learnt tte advanced text engine
     [x] add death and menu
 - next plan
     - add textbox for text
