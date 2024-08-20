@@ -27,7 +27,19 @@
 - next plan
     - figure out how to export tilemap with transparent indice 0 being reserved
     - figure out how to set background color
-    - add items and monsters
+# Aug.20 2024
+- What I did
+    [x] Add Backdrop
+         Getting more familiar with tile and pal memory
+         Getting familiar with ipad as external drawing tablet for pc
     - add audio
+        [x] jump notes
+        [x] game over song
+        [x] jump noise sfx
+    [x] fixed overflow bug
+- Plan
+    - add items
+    - add monsters
+    - add shotting animation
+    - add bullet gameobject
 
-    

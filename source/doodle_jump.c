@@ -41,34 +41,118 @@ void clear_resources(bool bitmap_mode){
 #include "gfx_doodle.h"
 int gfx_doodle_tile_idx,gfx_doodle_pal_idx;
 void load_doodle_gfx(){
-    memcpy32(&tile_mem[4][current_obj_tile_idx],gfx_doodleTiles,gfx_doodleTilesLen/4);
+    LZ77UnCompVram(gfx_doodleTiles, &tile_mem[4][current_obj_tile_idx]);
     gfx_doodle_tile_idx=current_obj_tile_idx;
-    current_obj_tile_idx+=gfx_doodleTilesLen/32;
-    memcpy32(&pal_obj_bank[current_obj_pal_idx],gfx_doodlePal,gfx_doodlePalLen/4);
+    current_obj_tile_idx+=4;
+    LZ77UnCompVram(gfx_doodlePal, pal_obj_bank[current_obj_pal_idx]);
     gfx_doodle_pal_idx=current_obj_pal_idx;
     current_obj_pal_idx++;
 }
 #include "gfx_platforms.h"
 int gfx_platform_tile_idx, gfx_platform_pal_idx;
 void load_platform_gfx(){
-    memcpy32(&tile_mem[4][current_obj_tile_idx],gfx_platformsTiles,gfx_platformsTilesLen/4);
+    LZ77UnCompVram(gfx_platformsTiles, &tile_mem[4][current_obj_tile_idx]);
     gfx_platform_tile_idx=current_obj_tile_idx;
-    current_obj_tile_idx+=gfx_platformsTilesLen/32;
-    memcpy32(&pal_obj_bank[current_obj_pal_idx],gfx_platformsPal,gfx_platformsPalLen/4);
+    current_obj_tile_idx+=6;
+    LZ77UnCompVram(gfx_platformsPal, pal_obj_bank[current_obj_pal_idx]);
     gfx_platform_pal_idx=current_obj_pal_idx;
     current_obj_pal_idx++;
 }
 #include "gfx_bg_tile.h"
 int gfx_bg_cbb_idx,gfx_bg_pal_idx;
 void load_bg_gfx(){
-    memcpy32(&tile_mem[current_bg_cbb_idx][0],gfx_bg_tileTiles,gfx_bg_tileTilesLen/4);
+    LZ77UnCompVram(gfx_bg_tileTiles, tile_mem[current_bg_cbb_idx]);
     gfx_bg_cbb_idx=current_bg_cbb_idx;
     current_bg_cbb_idx++;
-    memcpy32(&pal_bg_bank[current_bg_pal_idx],gfx_bg_tilePal,gfx_bg_tilePalLen/4);
+    LZ77UnCompVram(gfx_bg_tilePal, pal_bg_bank[current_bg_pal_idx]);
     gfx_bg_pal_idx=current_bg_pal_idx;
     current_bg_pal_idx++;
 }
+#include "gfx_bg_drop.h"
+int gfx_bg_drop_cbb_idx,gfx_bg_drop_pal_idx,gfx_bg_drop_sbb_idx;
+void load_bg_drop_gfx(){
+    LZ77UnCompVram(gfx_bg_dropTiles, tile_mem[current_bg_cbb_idx]);
+    gfx_bg_drop_cbb_idx=current_bg_cbb_idx;
+    current_bg_cbb_idx+=1;
+    LZ77UnCompVram(gfx_bg_dropPal, pal_bg_bank[current_bg_pal_idx]);
+    gfx_bg_pal_idx=current_bg_pal_idx;
+    current_bg_pal_idx++;
+    LZ77UnCompVram(gfx_bg_dropMap, se_mem[current_sbb_buffer]);
+    gfx_bg_drop_sbb_idx=current_sbb_buffer;
+    current_sbb_buffer+=1;
+}
 
+// ========== Audio ==========
+// C C# D D# E F F# G G# A A# B
+// 0 1  2 3  4 5 6  7 8  9 10 11
+typedef struct{
+    int len;
+    s8* notes;
+    u8* waits;
+    u8* channels;
+} Song;
+Song song_jump={
+    .len=3,
+    .notes=(s8[]){-64+5, 16+0, 16+7},
+    .waits=(u8[]){0,     3,     3},
+    .channels=(u8[]){4, 1,     1},
+};
+Song song_fake={
+    .len=1,
+    .notes=(s8[]){-48+10},
+    .waits=(u8[]){0},
+    .channels=(u8[]){4},
+};
+void randomize_song_jump(){
+    const int scales[]={9,16+0,16+2,16+4,16+7,16+9,32+0,32+2,32+4,32+7};
+    int idx=rand()%(10-2);
+    song_jump.notes[1]=scales[idx];
+    song_jump.notes[2]=scales[idx+2];
+}
+const Song song_failure={
+    .len=5,
+    .notes=(s8[]){ -48+0, 16+7, 16+3, 16+0,0+9},
+    .waits=(u8[]){ 0, 3,     3,    3,   3},
+    .channels=(u8[]){4, 1,     1,    1,   1},
+};
+const Song* current_song;
+int current_song_idx=0;
+int current_song_wait=0;
+void play_song(const Song* song){
+    current_song=song;
+    current_song_idx=0;
+    current_song_wait=0;
+}
+void update_song(){
+    while(true){
+        if(current_song_idx>=current_song->len)return;
+        if(current_song_wait>0){current_song_wait--;return;}
+        int note= current_song->notes[current_song_idx];
+        int channel= current_song->channels[current_song_idx];
+        switch (channel){
+            case 1: REG_SND1FREQ = SFREQ_RESET | SND_RATE(note&0xf, note>>4); break;
+            case 4: REG_SND4FREQ = SFREQ_RESET | SND_RATE(note&0xf, note>>4); break;
+            default: break;
+        }
+        current_song_wait= current_song->waits[current_song_idx];
+        current_song_idx++;
+    }
+}
+
+void configure_sound(){
+    REG_SNDSTAT= SSTAT_ENABLE;
+    REG_SNDDMGCNT= SDMG_BUILD_LR(SDMG_SQR1|SDMG_SQR2|SDMG_NOISE, 7);
+    REG_SNDDSCNT= SDS_DMG100;
+    REG_SND1SWEEP= SSW_OFF;
+	REG_SND1CNT= SSQR_ENV_BUILD(12, 0, 3) | SSQR_DUTY1_2;
+	REG_SND1FREQ= 0;
+    REG_SND4CNT= SSQR_ENV_BUILD(15, 0, 1);
+    REG_SND4FREQ= 0;
+
+}
+void update_sound(){
+    update_song();
+}
 // ========== GameObjects ==========
 struct{
     int dy;
@@ -104,13 +188,18 @@ int platform_tail=0;
 #define VIEWPORT_HEIGHT 160
 #define CLR_BG RGB15(30,29,29)
 void configure_background(){
-    for(int i=0;i<32*32;i++)se_mem[current_sbb_buffer][i]=0;
-    REG_BG3CNT=BG_CBB(gfx_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(3);
-    REG_DISPCNT|=DCNT_BG3;
+    REG_DISPCNT|=DCNT_BG2;
     background.sbb_idx=current_sbb_buffer; current_sbb_buffer++;
+    REG_BG2CNT=BG_CBB(gfx_bg_cbb_idx)|BG_SBB(background.sbb_idx)|BG_4BPP|BG_REG_32x32|BG_PRIO(2);
+    for(int i=0;i<32*32;i++)se_mem[background.sbb_idx][i]=0;
+
+    REG_DISPCNT|=DCNT_BG3;
+    REG_BG3CNT=BG_CBB(gfx_bg_drop_cbb_idx)|BG_SBB(gfx_bg_drop_sbb_idx)|BG_4BPP|BG_REG_32x32|BG_PRIO(3);
+    for(int i=0;i<32*32;i++)se_mem[gfx_bg_drop_sbb_idx][i]|=gfx_bg_pal_idx<<12; // Set Palette
+    REG_BG3HOFS=0;REG_BG3VOFS=0;
 }
 void draw_background(){
-    REG_BG3HOFS=0;REG_BG3VOFS=-background.dy%8;
+    REG_BG2HOFS=0;REG_BG2VOFS=-background.dy%8;
 }
 
 // ---------- Doodle ----------
@@ -132,7 +221,7 @@ void start_doodle(){
 void draw_doodle(){
     OBJ_ATTR *spr= &obj_buffer[obj_buffer_current++];
     // obj_set_attr(spr,ATTR0_SQUARE,ATTR1_SIZE_16,ATTR2_BUILD(gfx_doodle_tile_idx,gfx_doodle_pal_idx,3));
-    obj_set_attr(spr,ATTR0_SQUARE,ATTR1_SIZE_16,ATTR2_ID(gfx_doodle_tile_idx)|ATTR2_PALBANK(gfx_doodle_pal_idx)|ATTR2_PRIO(3));
+    obj_set_attr(spr,ATTR0_SQUARE,ATTR1_SIZE_16,ATTR2_ID(gfx_doodle_tile_idx)|ATTR2_PALBANK(gfx_doodle_pal_idx)|ATTR2_PRIO(1));
     int x=fx2int(doodle.x)-7;
     int y=fx2int(doodle.y)-15;
     if(!doodle.turn){spr->attr1|=ATTR1_HFLIP;x--;}
@@ -158,11 +247,12 @@ void update_doodle(){
     doodle.vy=fxadd(doodle.vy,doodle.g);
     doodle.last_y=doodle.y;
     doodle.y=fxadd(doodle.y,doodle.vy);
-    // if(doodle.y>int2fx(VIEWPORT_HEIGHT-1)){
+    // if(doodle.y>int2fx(VIEWPORT_HEIGHT-1)){ // bounce off the floor, for testing
     //     doodle.y=int2fx(VIEWPORT_HEIGHT-1);
     //     doodle.vy=-doodle.velo;
     // }
     if(doodle.y>int2fx(VIEWPORT_HEIGHT+doodle_extend)){
+        play_song(&song_failure);
         game.game_over=true;
     }
 }
@@ -181,6 +271,7 @@ Platform* add_platform(FIXED x,FIXED y,PlatformType type){
     return p;
 }
 void draw_platform(Platform* p){
+    if(p->type==PLATFORM_INACTIVE)return;
     OBJ_ATTR *spr= &obj_buffer[obj_buffer_current++];
     int tile_idx=gfx_platform_tile_idx;
     switch(p->type){
@@ -189,12 +280,17 @@ void draw_platform(Platform* p){
         case PLATFORM_FAKE:     tile_idx+=4;    break;
         default: break;
     }
-    obj_set_attr(spr,ATTR0_WIDE,ATTR1_SIZE_16x8,ATTR2_ID(tile_idx)|ATTR2_PALBANK(gfx_platform_pal_idx)|ATTR2_PRIO(3));
+    obj_set_attr(spr,ATTR0_WIDE,ATTR1_SIZE_16x8,ATTR2_ID(tile_idx)|ATTR2_PALBANK(gfx_platform_pal_idx)|ATTR2_PRIO(1));
     int x=fx2int(p->x)-platform_extend;
     int y=fx2int(p->y);
     obj_set_pos(spr,x,y);
 }
 void update_platform(Platform* p){
+    if(p->type==PLATFORM_INACTIVE)return;
+    // destroy platform if out of screen
+    if(p->y>int2fx(VIEWPORT_HEIGHT)){
+        p->type=PLATFORM_INACTIVE;
+    }
     // check collision against player
     bool collide=( 
         doodle.vy>0
@@ -203,8 +299,11 @@ void update_platform(Platform* p){
         && doodle.last_y<=p->y && doodle.y>=p->y);
     if(collide){
         if(p->type==PLATFORM_FAKE){
+            play_song(&song_fake);
             p->type=PLATFORM_INACTIVE;
         }else{
+            randomize_song_jump();
+            play_song(&song_jump);
             doodle.vy=-doodle.velo;
             doodle.y=p->y;
         }
@@ -218,10 +317,6 @@ void update_platform(Platform* p){
     if(p->x>int2fx(VIEWPORT_WIDTH-platform_extend)){
         p->x=int2fx(VIEWPORT_WIDTH-platform_extend);
         p->vx=-p->vx;
-    }
-    // destroy platform if out of screen
-    if(p->y>int2fx(VIEWPORT_HEIGHT)){
-        p->type=PLATFORM_INACTIVE;
     }
 }
 void start_platforms(){
@@ -250,6 +345,7 @@ void update_camera(){
     background.dy+=screen_scroll;
 }
 void update_platform_spawn(){
+    if(key_is_down(KEY_L) && key_hit(KEY_R))game.score+=1500;
 
     int plat_y_interval;FIXED plat_vy;int freq_moving;int freq_fake;
     if(game.score<1){plat_y_interval=10;plat_vy=0;freq_moving=0;freq_fake=0;}
@@ -278,16 +374,14 @@ void update_platform_spawn(){
             }
         }
 
-        add_platform(int2fx(x),int2fx(game.next_plat_y),t);
+        Platform* platform=add_platform(int2fx(x),int2fx(game.next_plat_y),t);
         if(t==PLATFORM_MOVING){
-            platforms[platform_tail-1].vx=rand()%2==0?plat_vy:-plat_vy;
+            platform->vx=rand()%2==0?plat_vy:-plat_vy;
         }
     }
-
 }
 // ---------- UI ----------
 void configure_ui(){
-    memset32(&se_mem[6],0,SBB_SIZE/4);
     tte_init_chr4c(
         0,
         BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(0),
@@ -330,6 +424,7 @@ int menu_game_over(){
     while(1){
         key_poll();
         VBlankIntrWait();
+        update_sound();
         if(key_hit(KEY_ANY)){
             tte_erase_rect(0,0,VIEWPORT_WIDTH,VIEWPORT_HEIGHT);
             return 0;
@@ -349,17 +444,17 @@ int main()
     load_doodle_gfx();
     load_platform_gfx();
     load_bg_gfx();
+    load_bg_drop_gfx();
     // ======== Configure Display ========
     REG_DISPCNT= DCNT_MODE0 | DCNT_OBJ | DCNT_OBJ_1D;
     REG_WIN1H=0<<8|VIEWPORT_WIDTH;
     REG_WIN1V=0<<8|VIEWPORT_HEIGHT;
     REG_WIN1CNT=WIN_ALL;
-    REG_WINOUTCNT=WIN_BG0;
-    // REG_WININ=WININ_BUILD(WIN_ALL,WIN_ALL);
-    // REG_WINOUT=WINOUT_BUILD(WIN_BG0,0);
+    REG_WINOUTCNT=WIN_BG0|WIN_BG3;
     REG_DISPCNT|=DCNT_WIN1;
     configure_background();
     configure_ui();
+    configure_sound();
     while(1){
         // ======== Initialize GameObjects ========
         start_game();
@@ -387,6 +482,7 @@ int main()
             //======== Updating VRAM at VBlank (83776 cycles) ========
             VBlankIntrWait();
             profile_start();
+            update_sound();
             draw_ui();
             oam_copy(oam_mem,obj_buffer,128);
             draw_background();
@@ -394,9 +490,6 @@ int main()
             //========Debug Display========
             char str[32];
             siprintf(str,"%d %d",time1,time2);
-            // bm_clrs(80,150,str,CLR_BLACK);
-            // bm_puts(80,150,str,CLR_WHITE);
-            // tte_set_pos(80,152);
             tte_set_pos(VIEWPORT_WIDTH,148);
             tte_erase_rect(VIEWPORT_WIDTH,148,240,160);
             tte_write(str);

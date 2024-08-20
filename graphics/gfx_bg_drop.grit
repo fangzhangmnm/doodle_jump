@@ -1,0 +1,9 @@
+-gt -gB4 -mR4 -mLs -Zl -pe16
+
+# -gt Tiled graphics output (default).
+# -gB <n> Bit depth of the output. Can be 1, 2, 4, 8 or 16. 16 bpp is a truecolor mode, the rest are paletted. If the source image is not of this bitdepth yet, it will be converted.
+# -mR4 Tile reduction combo for regular backgrounds with 4bpp tiles: tile, palette and flip reduction.
+# -mLs Map layout for regular backgrounds. 16-bit entries, broken down into screenblocks.
+# -Zl Set all output to use LZ77 compression.
+# -pe <n> End palette entry. For example, -pe 32 would output the palette up to, but not including, color 32. Works together with -ps.
+# -pe also fixes the transparency color issue

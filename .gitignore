@@ -1,2 +1,4 @@
 build/
 *.elf
+screenshots/
+!screenshots/screenshot.gif
