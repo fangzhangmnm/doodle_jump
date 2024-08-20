@@ -103,7 +103,7 @@ int platform_tail=0;
 #define VIEWPORT_WIDTH 72
 #define VIEWPORT_HEIGHT 160
 #define CLR_BG RGB15(30,29,29)
-void init_background(){
+void configure_background(){
     for(int i=0;i<32*32;i++)se_mem[current_sbb_buffer][i]=0;
     REG_BG3CNT=BG_CBB(gfx_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(3);
     REG_DISPCNT|=DCNT_BG3;
@@ -115,7 +115,7 @@ void draw_background(){
 
 // ---------- Doodle ----------
 const int doodle_extend=5;
-void init_doodle(){
+void start_doodle(){
     doodle.x=int2fx(VIEWPORT_WIDTH/2);
     doodle.y=int2fx(VIEWPORT_HEIGHT/2);
     doodle.turn=0;
@@ -224,8 +224,12 @@ void update_platform(Platform* p){
         p->type=PLATFORM_INACTIVE;
     }
 }
+void start_platforms(){
+    for(int i=0;i<MAX_PLATFORMS;i++)
+        platforms[i].type=PLATFORM_INACTIVE;
+}
 // ---------- Game Manager ----------
-void init_game(){
+void start_game(){
     game.score=0;
     game.next_plat_y=VIEWPORT_HEIGHT;
     game.fake_plat_y_total=0;
@@ -267,7 +271,7 @@ void update_platform_spawn(){
         else if(r<freq_moving+freq_fake)t=PLATFORM_FAKE;
         else t=PLATFORM_NORMAL;
         if(t==PLATFORM_FAKE){//limit consecutive fake platforms
-            game.fake_plat_y_total+=platform_extend_y;
+            game.fake_plat_y_total+=plat_y_interval;
             if(game.fake_plat_y_total>doodle.max_plat_dist){
                 t=PLATFORM_NORMAL;
                 game.fake_plat_y_total=0;
@@ -282,27 +286,23 @@ void update_platform_spawn(){
 
 }
 // ---------- UI ----------
-void init_ui(){
+void configure_ui(){
     memset32(&se_mem[6],0,SBB_SIZE/4);
-    // tte_init_se(
-    //     0,
-    //     BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(0),
-    //     current_bg_pal_idx<<12,
-    //     CLR_BLACK,
-    //     14,
-    //     NULL,
-    //     (fnDrawg)se_drawg_w8h8);
     tte_init_chr4c(
         0,
         BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(0),
         current_bg_pal_idx<<12,
-        bytes2word(13,15,1,0),
+        bytes2word(13,15,0,0),
         CLR_BLACK,
         &verdana9_b4Font,
         (fnDrawg)chr4c_drawg_b4cts_fast);
     tte_set_color(TTE_INK,CLR_WHITE);
     tte_set_color(TTE_SHADOW,CLR_BLACK);
-    tte_set_color(TTE_PAPER,CLR_GRAY);
+
+    REG_WIN0CNT=WIN_ALL|WIN_BLD;
+    REG_BLDCNT= (BLD_ALL&~BIT(0)) | BLD_BLACK;
+    REG_BLDY=8;
+    REG_DISPCNT|=DCNT_WIN0;
 
 
     current_bg_cbb_idx++;
@@ -312,21 +312,28 @@ void init_ui(){
 }
 void draw_ui(){
     char str[32];
+    REG_WIN0H=0<<8|VIEWPORT_WIDTH;
+    REG_WIN0V=0<<8|10;
     siprintf(str,"Score:%8d",min(game.score,99999999));
-    tte_set_pos(8,0);
-    tte_erase_rect(0,0,VIEWPORT_WIDTH,12);
+    tte_set_pos(8,-2);
+    tte_erase_rect(0,0,VIEWPORT_WIDTH,10);
     tte_write(str);
 }
 // ========== Menus ==========
 int menu_game_over(){
+    REG_WIN0H=0<<8|VIEWPORT_WIDTH;
+    REG_WIN0V=0<<8|VIEWPORT_HEIGHT;
+    tte_set_pos(8,72);
+    tte_write("Game Over");
+    tte_set_pos(5,80);
+    tte_write("Press Any Key");
     while(1){
-        VBlankIntrWait();
         key_poll();
-        tte_set_pos(0,72);
-        tte_write("Game Over");
-        tte_set_pos(8,80);
-        tte_write("Press A");
-        if(key_hit(KEY_A))return 0;
+        VBlankIntrWait();
+        if(key_hit(KEY_ANY)){
+            tte_erase_rect(0,0,VIEWPORT_WIDTH,VIEWPORT_HEIGHT);
+            return 0;
+        }
     }
 }
 
@@ -336,27 +343,29 @@ int main()
     irq_init(NULL);irq_add(II_VBLANK, NULL);
     txt_init_std();
     oam_init(obj_buffer,128);
-
+ 
     // ======== Load Resources ========
     clear_resources(false);
     load_doodle_gfx();
     load_platform_gfx();
     load_bg_gfx();
-
     // ======== Configure Display ========
     REG_DISPCNT= DCNT_MODE0 | DCNT_OBJ | DCNT_OBJ_1D;
-    REG_WIN0H=WIN_BUILD(VIEWPORT_WIDTH,0);
-    REG_WIN0V=WIN_BUILD(VIEWPORT_HEIGHT,0);
-    REG_WININ=WININ_BUILD(WIN_BG0|WIN_BG3|WIN_OBJ,0);
-    REG_WINOUT=WINOUT_BUILD(WIN_BG0,0);
-    REG_DISPCNT|=DCNT_WIN0;
-    // ======== Initialize GameObjects ========
-    init_game();
-    init_doodle();
-    init_background();
-    init_ui();
-
+    REG_WIN1H=0<<8|VIEWPORT_WIDTH;
+    REG_WIN1V=0<<8|VIEWPORT_HEIGHT;
+    REG_WIN1CNT=WIN_ALL;
+    REG_WINOUTCNT=WIN_BG0;
+    // REG_WININ=WININ_BUILD(WIN_ALL,WIN_ALL);
+    // REG_WINOUT=WINOUT_BUILD(WIN_BG0,0);
+    REG_DISPCNT|=DCNT_WIN1;
+    configure_background();
+    configure_ui();
     while(1){
+        // ======== Initialize GameObjects ========
+        start_game();
+        start_doodle();
+        start_platforms();
+
         while(!game.game_over){
             //======== Updating Game Logic at VDraw(197120 cycles) ========
             profile_start();

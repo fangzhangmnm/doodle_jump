@@ -21,8 +21,12 @@
     [x] write text on tile mode
     [x] learnt tte advanced text engine
     [x] add death and menu
+        [x] fix start/init bugs
+    [x] add textbox for text
+    [x] fixed bug of consective fake platforms
 - next plan
-    - add textbox for text
+    - figure out how to export tilemap with transparent indice 0 being reserved
+    - figure out how to set background color
     - add items and monsters
     - add audio
 
