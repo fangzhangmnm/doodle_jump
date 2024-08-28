@@ -45,4 +45,41 @@
 - What I left
     - still consequent fake platform distance too large bug
     - fix VRAM overlap bug
-
+# Aug.27 2024
+- What I did
+    [x] finished dealing with the VRAM overlap problem and rehauled the resource allocation logic
+- Next
+    - add propeller and rocket
+    - add monsters. try to trace original onsters design
+    - add shot animation
+    - add bullet spawn and bullet object pool
+    - fix consequent fake platform distance too large bug
+# Aug.28 2024
+[x] replace mod and div with and and rshift
+[x] separate c code to multiple files
+[x] upgraded sprite load code
+- add monsters
+    [temporaily use current] planning
+    [x] artwork
+    [x] display, memory pool and spawing
+    [x] player collision
+    [x] bullet collision
+    [ ] death sfx
+    [ ] monster movement
+    - determine monster distribution in levels
+- add bullets
+    [x] artwork
+    [x] display, memory pool and spawing
+    [x] movement
+    [x] shoot
+    [ ] shoot sfx
+- add items
+    [ ] artwork
+    [ ] display, memory pool and spawing
+    [ ] sfx
+    [ ] effects
+- refactor song engine
+    [ ] concurrent songs
+    [ ] different instruments
+- maybe new level generation paradigm?
+    - sequential level templates
