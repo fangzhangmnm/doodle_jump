@@ -42,4 +42,7 @@
     - add monsters
     - add shotting animation
     - add bullet gameobject
+- What I left
+    - still consequent fake platform distance too large bug
+    - fix VRAM overlap bug
 

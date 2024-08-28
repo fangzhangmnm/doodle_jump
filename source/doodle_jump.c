@@ -1,17 +1,105 @@
 #include <tonc.h>
-// #include <stdlib.h>
-// #include <string.h>
 // ========== Obj Buffer API ==========
-
-OBJ_ATTR obj_buffer[128];
+// Here we use shadow object buffer, and copy it to VRAM at VBlank
+// The reason we use shadow object buffer is because writing to shadow object buffer is far more faster than writing to VRAM
+OBJ_ATTR obj_buffer[128]; // GBA supports 128 sprites
 int obj_buffer_current=0;
-OBJ_AFFINE *obj_aff_buffer= (OBJ_AFFINE*)obj_buffer;
+OBJ_AFFINE *obj_aff_buffer= (OBJ_AFFINE*)obj_buffer; // the same address is also used by affine sprites
 void clear_objects(){
     for (; obj_buffer_current < 128; obj_buffer_current++)
         obj_buffer[obj_buffer_current].attr0 = ATTR0_HIDE;
     obj_buffer_current = 0;
 }
-int current_sbb_buffer=1; // 0 cannot be used (why?)
+
+
+// ========== Resource Allocation ==========
+
+// TODO fix overlapping of charblock and screen block bugs
+
+// background CBB (char block base) goes from 0-3, and SBB (screen block base) goes from 0-31, they share the same memory address
+// 32 screen blocks = 4 char blocks = 64KB VRAM
+// 1 screen block = 2KB = 32x32 screen tiles (2 Byte per tile)
+// 1 char block = 16KB = 512 char tiles (32 Byte per tile)
+// 1 char tile = 32 Bytes = 8x8 pixels (4 bit per pixel)
+// 1 char block = 8 screen blocks, 1 screen block = 64 char tiles
+// 1 nonrepeating screen = 240x160 pixels or 30x20 tiles = 600 tiles = 18.75KB
+// TTE takes 1 screen of char blocks and 1 screen block. so total 11 screen blocks = 22KB VRAM. We can start at CB 704, which is the CB 192 at the CBB 1
+int current_obj_cb_idx; //ct stands for char tile, count in 32 Bytes
+int current_obj_pal_idx;
+int current_bg_cb_idx;
+int current_bg_pal_idx;
+int current_bg_sbb;
+#define TONC_CBB 0
+#define TONC_SBB 10
+#define TONC_BG_PAL_IDX 0
+
+// int current_bg_cbb_idx;
+void clear_resources(bool bitmap_mode){
+    current_obj_cb_idx=bitmap_mode?512:0;
+    current_obj_pal_idx=0;
+    current_bg_pal_idx=TONC_BG_PAL_IDX+1;
+    current_bg_cb_idx=(TONC_SBB+1)*64; //Tonc takes 1 cbb + 192 on the second cbb
+    current_bg_sbb=31; // goes from 31 to 0. hopefully not overlapping with other resources
+}
+int get_current_cbb(){
+    return current_bg_cb_idx/512;
+}
+int get_current_cb_idx(){
+    return current_bg_cb_idx%512;
+}
+void set_sb(int sbb_idx,int num,int cb_idx_shift,int pal_idx){
+    // apply the palette to the screen block and shift the charblock index
+    for(int i=0;i<32*32*num;i++)
+        se_mem[sbb_idx][i]=(se_mem[sbb_idx][i]+cb_idx_shift)|pal_idx<<12;
+}
+
+// ========== Loading Resources ==========
+
+#include "gfx_doodle.h"
+int gfx_doodle_tile_idx,gfx_doodle_pal_idx;
+void load_doodle_gfx(){
+    gfx_doodle_tile_idx=current_obj_cb_idx;
+    LZ77UnCompVram(gfx_doodleTiles, &tile_mem[4][current_obj_cb_idx]);
+    current_obj_cb_idx+=4;
+    gfx_doodle_pal_idx=current_obj_pal_idx;
+    LZ77UnCompVram(gfx_doodlePal, pal_obj_bank[current_obj_pal_idx]);
+    current_obj_pal_idx++;
+}
+#include "gfx_platforms.h"
+int gfx_platform_tile_idx, gfx_platform_pal_idx;
+void load_platform_gfx(){
+    gfx_platform_tile_idx=current_obj_cb_idx;
+    LZ77UnCompVram(gfx_platformsTiles, &tile_mem[4][current_obj_cb_idx]);
+    current_obj_cb_idx+=6;
+    gfx_platform_pal_idx=current_obj_pal_idx;
+    LZ77UnCompVram(gfx_platformsPal, pal_obj_bank[current_obj_pal_idx]);
+    current_obj_pal_idx++;
+}
+#include "gfx_bg_tile.h"
+int gfx_bg_cbb,gfx_bg_cb_idx,gfx_bg_pal_idx;
+void load_bg_gfx(){
+    gfx_bg_cbb=get_current_cbb();gfx_bg_cb_idx=get_current_cb_idx();
+    LZ77UnCompVram(gfx_bg_tileTiles, &tile_mem[gfx_bg_cbb][gfx_bg_cb_idx]);
+    current_bg_cb_idx+=1;
+    gfx_bg_pal_idx=current_bg_pal_idx;
+    LZ77UnCompVram(gfx_bg_tilePal, pal_bg_bank[current_bg_pal_idx]);
+    current_bg_pal_idx++;
+}
+#include "gfx_bg_drop.h"
+int gfx_bg_drop_cbb,gfx_bg_drop_cb_idx,gfx_bg_drop_pal_idx;
+int gfx_bg_drop_sbb_idx;
+void load_bg_drop_gfx(){
+    gfx_bg_drop_cbb=get_current_cbb();gfx_bg_drop_cb_idx=get_current_cb_idx();
+    LZ77UnCompVram(gfx_bg_dropTiles, &tile_mem[gfx_bg_drop_cbb][gfx_bg_drop_cb_idx]);
+    current_bg_cb_idx+=251;
+    gfx_bg_drop_pal_idx=current_bg_pal_idx;
+    LZ77UnCompVram(gfx_bg_dropPal, pal_bg_bank[current_bg_pal_idx]);
+    current_bg_pal_idx++;
+    gfx_bg_drop_sbb_idx=current_bg_sbb;
+    LZ77UnCompVram(gfx_bg_dropMap, &se_mem[gfx_bg_drop_sbb_idx]);
+    current_bg_sbb-=1;
+    set_sb(gfx_bg_drop_sbb_idx,1,gfx_bg_drop_cb_idx,gfx_bg_drop_pal_idx);
+}
 
 //========== RNG API ==========
 
@@ -20,66 +108,6 @@ INLINE int rand(){
     // returns a [0,32767] random number
     _rand_seed=1664525*_rand_seed+1013904223;
     return (_rand_seed>>16)&0x7FFF;
-}
-
-
-
-
-// ========== Resource Allocation ==========
-
-int current_obj_tile_idx;
-int current_obj_pal_idx;
-int current_bg_pal_idx;
-int current_bg_cbb_idx;
-void clear_resources(bool bitmap_mode){
-    current_obj_tile_idx=bitmap_mode?512:0;
-    current_obj_pal_idx=0;
-    current_bg_pal_idx=0;
-}
-
-
-#include "gfx_doodle.h"
-int gfx_doodle_tile_idx,gfx_doodle_pal_idx;
-void load_doodle_gfx(){
-    LZ77UnCompVram(gfx_doodleTiles, &tile_mem[4][current_obj_tile_idx]);
-    gfx_doodle_tile_idx=current_obj_tile_idx;
-    current_obj_tile_idx+=4;
-    LZ77UnCompVram(gfx_doodlePal, pal_obj_bank[current_obj_pal_idx]);
-    gfx_doodle_pal_idx=current_obj_pal_idx;
-    current_obj_pal_idx++;
-}
-#include "gfx_platforms.h"
-int gfx_platform_tile_idx, gfx_platform_pal_idx;
-void load_platform_gfx(){
-    LZ77UnCompVram(gfx_platformsTiles, &tile_mem[4][current_obj_tile_idx]);
-    gfx_platform_tile_idx=current_obj_tile_idx;
-    current_obj_tile_idx+=6;
-    LZ77UnCompVram(gfx_platformsPal, pal_obj_bank[current_obj_pal_idx]);
-    gfx_platform_pal_idx=current_obj_pal_idx;
-    current_obj_pal_idx++;
-}
-#include "gfx_bg_tile.h"
-int gfx_bg_cbb_idx,gfx_bg_pal_idx;
-void load_bg_gfx(){
-    LZ77UnCompVram(gfx_bg_tileTiles, tile_mem[current_bg_cbb_idx]);
-    gfx_bg_cbb_idx=current_bg_cbb_idx;
-    current_bg_cbb_idx++;
-    LZ77UnCompVram(gfx_bg_tilePal, pal_bg_bank[current_bg_pal_idx]);
-    gfx_bg_pal_idx=current_bg_pal_idx;
-    current_bg_pal_idx++;
-}
-#include "gfx_bg_drop.h"
-int gfx_bg_drop_cbb_idx,gfx_bg_drop_pal_idx,gfx_bg_drop_sbb_idx;
-void load_bg_drop_gfx(){
-    LZ77UnCompVram(gfx_bg_dropTiles, tile_mem[current_bg_cbb_idx]);
-    gfx_bg_drop_cbb_idx=current_bg_cbb_idx;
-    current_bg_cbb_idx+=1;
-    LZ77UnCompVram(gfx_bg_dropPal, pal_bg_bank[current_bg_pal_idx]);
-    gfx_bg_pal_idx=current_bg_pal_idx;
-    current_bg_pal_idx++;
-    LZ77UnCompVram(gfx_bg_dropMap, se_mem[current_sbb_buffer]);
-    gfx_bg_drop_sbb_idx=current_sbb_buffer;
-    current_sbb_buffer+=1;
 }
 
 // ========== Audio ==========
@@ -156,7 +184,7 @@ void update_sound(){
 // ========== GameObjects ==========
 struct{
     int dy;
-    int sbb_idx;
+    int sbb;
 }background;
 struct{
     int score;
@@ -189,13 +217,12 @@ int platform_tail=0;
 #define CLR_BG RGB15(30,29,29)
 void configure_background(){
     REG_DISPCNT|=DCNT_BG2;
-    background.sbb_idx=current_sbb_buffer; current_sbb_buffer++;
-    REG_BG2CNT=BG_CBB(gfx_bg_cbb_idx)|BG_SBB(background.sbb_idx)|BG_4BPP|BG_REG_32x32|BG_PRIO(2);
-    for(int i=0;i<32*32;i++)se_mem[background.sbb_idx][i]=0;
+    background.sbb=current_bg_sbb;current_bg_sbb--;
+    REG_BG2CNT=BG_CBB(gfx_bg_cbb)|BG_SBB(background.sbb)|BG_4BPP|BG_REG_32x32|BG_PRIO(2);
+    for(int i=0;i<32*32;i++)se_mem[background.sbb][i]=gfx_bg_cb_idx|gfx_bg_pal_idx<<12;
 
     REG_DISPCNT|=DCNT_BG3;
-    REG_BG3CNT=BG_CBB(gfx_bg_drop_cbb_idx)|BG_SBB(gfx_bg_drop_sbb_idx)|BG_4BPP|BG_REG_32x32|BG_PRIO(3);
-    for(int i=0;i<32*32;i++)se_mem[gfx_bg_drop_sbb_idx][i]|=gfx_bg_pal_idx<<12; // Set Palette
+    REG_BG3CNT=BG_CBB(gfx_bg_drop_cbb)|BG_SBB(gfx_bg_drop_sbb_idx)|BG_4BPP|BG_REG_32x32|BG_PRIO(3);
     REG_BG3HOFS=0;REG_BG3VOFS=0;
 }
 void draw_background(){
@@ -384,8 +411,8 @@ void update_platform_spawn(){
 void configure_ui(){
     tte_init_chr4c(
         0,
-        BG_CBB(current_bg_cbb_idx)|BG_SBB(current_sbb_buffer)|BG_4BPP|BG_REG_32x32|BG_PRIO(0),
-        current_bg_pal_idx<<12,
+        BG_CBB(TONC_CBB)|BG_SBB(TONC_SBB)|BG_4BPP|BG_REG_32x32|BG_PRIO(0),
+        TONC_BG_PAL_IDX<<12,
         bytes2word(13,15,0,0),
         CLR_BLACK,
         &verdana9_b4Font,
@@ -397,11 +424,6 @@ void configure_ui(){
     REG_BLDCNT= (BLD_ALL&~BIT(0)) | BLD_BLACK;
     REG_BLDY=8;
     REG_DISPCNT|=DCNT_WIN0;
-
-
-    current_bg_cbb_idx++;
-    current_bg_pal_idx++;
-    current_sbb_buffer++;
     REG_DISPCNT|=DCNT_BG0;
 }
 void draw_ui(){
